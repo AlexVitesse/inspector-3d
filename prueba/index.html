@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>inspector-3d · prueba</title>
+<style>html,body{margin:0;height:100%;background:#111;overflow:hidden}</style>
+<script>
+  // ?three=<base> apunta three a otra copia (p. ej. un vendor local sin internet); por defecto jsdelivr three@0.160.0
+  const base = new URLSearchParams(location.search).get('three') || 'https://cdn.jsdelivr.net/npm/three@0.160.0/';
+  const im = document.createElement('script'); im.type = 'importmap';
+  im.textContent = JSON.stringify({ imports: { three: base + 'build/three.module.js', 'three/addons/': base + 'examples/jsm/' } });
+  document.head.append(im);
+</script>
+</head>
+<body>
+<script type="module">
+const nodos0 = document.querySelectorAll('*').length;
+// línea recomendada: sin ?debug=1 no se descarga nada
+if (new URLSearchParams(location.search).get('debug') === '1') await import('../inspector.js');
+
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { CopyShader } from 'three/addons/shaders/CopyShader.js';
+
+// escena mínima: nada se expone en window
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x223344);
+scene.fog = new THREE.Fog(0x223344, 10, 40);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 1, 6); camera.lookAt(0, 0, 0);
+
+const izq = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xcc4444 }));   // 12 tris
+izq.name = 'izquierda'; izq.position.x = -2.5; scene.add(izq);
+const central = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshPhongMaterial({ color: 0x44cc44 })); // 80 tris
+central.name = 'central'; central.castShadow = true;
+scene.add(central); // MARCA-CENTRAL
+const der = new THREE.Mesh(new THREE.TetrahedronGeometry(0.8), new THREE.MeshLambertMaterial({ color: 0x4444cc })); // 4 tris
+der.name = 'derecha'; der.position.x = 2.5; scene.add(der);
+const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({ color: 0xffffff }), 10); // 12 × 10
+inst.name = 'fila'; const m = new THREE.Matrix4();
+for (let i = 0; i < 10; i++) inst.setMatrixAt(i, m.makeTranslation(-4.5 + i, -1.8, -2));
+scene.add(inst);
+const sol = new THREE.DirectionalLight(0xffffff, 2); sol.name = 'sol'; sol.position.set(3, 5, 4); sol.castShadow = true; scene.add(sol);
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new ShaderPass(CopyShader));
+composer.addPass(new OutputPass());
+renderer.setAnimationLoop(() => { central.rotation.y += 0.01; composer.render(); });
+
+// ---------------- autoprueba: tras ~30 cuadros, POST /resultado
+// por cuadro: sombra 1 call (central, 80 tris) + escena 4 calls (12 + 80 + 4 + 120) + Copy 1 + Output 1 (1 tri cada uno)
+const ESPERADO = { calls: 7, tris: 298 };
+const cuadros = (n) => new Promise((ok) => { const f = () => (--n <= 0 ? ok() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+const R = { debug: new URLSearchParams(location.search).get('debug') === '1', esperado: ESPERADO, fallos: [] };
+const ver = (c, msg) => { if (!c) R.fallos.push(msg); };
+try {
+  await cuadros(30);
+  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+  R.gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  R.inspector = typeof window.__inspector3d; R.devtools = typeof globalThis.__THREE_DEVTOOLS__;
+  R.nodosNuevos = document.querySelectorAll('*').length - nodos0 - 1; // −1: el canvas de la app
+  const I = window.__inspector3d;
+  if (I) {
+    R.enganche = { renderer: I.renderer === renderer, scene: I.scene === scene, camera: I.camera === camera, composer: I.composer === composer };
+    R.stats = { ...I.stats };
+    // Alt+clic en el centro del canvas
+    const r = renderer.domElement.getBoundingClientRect();
+    renderer.domElement.dispatchEvent(new PointerEvent('pointerdown', { altKey: true, bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+    const s = I.seleccion;
+    R.seleccion = s && { nombre: s.objeto.name, tris: 80, trisFicha: document.querySelector('.i3-ficha')?.textContent.includes('80 tris'), origen: I.origen(s.objeto) };
+    await cuadros(3);
+    R.statsConResaltado = { calls: I.stats.calls, lineas: I.stats.lineas };
+    // toggles: cambian y restauran exacto
+    const t = {};
+    const prueba = (nombre, leer, off = false, on = true) => {
+      const a = JSON.stringify(leer()); I.set(nombre, off); const b = JSON.stringify(leer()); I.set(nombre, on); const c = JSON.stringify(leer());
+      t[nombre] = { cambia: a !== b, restaura: a === c };
+    };
+    prueba('sombras', () => sol.castShadow);
+    const f0 = scene.fog; prueba('niebla', () => (scene.fog === f0 ? 'original' : String(scene.fog)));
+    prueba('luces', () => [sol.visible, scene.children.filter((o) => o.isLight).map((l) => l.visible)]);
+    prueba('luz:0', () => sol.visible);
+    prueba('post', () => composer.passes.map((p) => p.enabled));
+    prueba('pase:1', () => composer.passes[1].enabled);
+    prueba('pixelRatio', () => [renderer.getPixelRatio(), composer._pixelRatio], 0.5, 'original');
+    R.toggles = t;
+    // copiarCamara: al evaluarse deja la misma pose
+    const txt = I.copiarCamara(), p0 = camera.position.clone(), q0 = camera.quaternion.clone();
+    camera.position.set(9, 9, 9); camera.lookAt(1, 2, 3);
+    new Function('camera', 'controls', txt)(camera, null);
+    R.camara = { txt, dPos: camera.position.distanceTo(p0), dRot: 1 - Math.abs(camera.quaternion.dot(q0)) };
+    R.copiarObjeto = I.copiarObjeto().length > 0;
+    R.memoria = I.memoria();
+  }
+} catch (e) { R.fallos.push('excepción: ' + (e.stack || e)); }
+fetch('/resultado', { method: 'POST', body: JSON.stringify(R) });
+</script>
+</body>
+</html>
