@@ -51,6 +51,7 @@ for (let i = 0; i < 10; i++) inst.setMatrixAt(i, m.makeTranslation(-4.5 + i, -1.
 scene.add(inst);
 const sol = new THREE.DirectionalLight(0xffffff, 2); sol.name = 'sol'; sol.position.set(3, 5, 4); sol.castShadow = true; scene.add(sol);
 scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const grupoFoco = new THREE.Group(); grupoFoco.name = 'grupoFoco'; const foco = new THREE.SpotLight(0xffffff, 5); foco.name = 'foco'; grupoFoco.add(foco); scene.add(grupoFoco); // MARCA-FOCO (sin sombra: no suma draw calls)
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -117,6 +118,16 @@ try {
     R.camara = { txt, dPos: camera.position.distanceTo(p0), dRot: 1 - Math.abs(camera.quaternion.dot(q0)) };
     R.copiarObjeto = I.copiarObjeto().length > 0;
     R.memoria = I.memoria();
+    // vigía de recompilaciones (como un vehículo con faro que se esconde): ocultar el grupo que contiene un foco cambia el conteo de luces
+    // y recompila; luego, agregar una luz puntual también. El vigía debe decir qué luz, qué objeto y dónde se agregó.
+    I.listo(); const n0 = I.recompilaciones.length;
+    const esperar = async (f) => { for (let i = 0; i < 400 && !f(); i++) await cuadros(1); };
+    grupoFoco.visible = false;
+    await esperar(() => I.recompilaciones.length > n0);
+    const punto = new THREE.PointLight(0xffffff, 3); punto.name = 'punto'; scene.add(punto); // MARCA-PUNTO
+    await esperar(() => I.recompilaciones.length > n0 + 1);
+    R.recomp = I.recompilaciones.slice(n0).map((x) => x.causas.join(' | '));
+    R.panelRc = document.querySelector('.i3-rc')?.textContent.includes('foco se ocultó por grupoFoco');
   }
 } catch (e) { R.fallos.push('excepción: ' + (e.stack || e)); }
 fetch('/resultado', { method: 'POST', body: JSON.stringify(R) });

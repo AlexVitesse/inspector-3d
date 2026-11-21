@@ -76,13 +76,14 @@ Si la página se abrió como directorio (`/` o `/app/` en vez de `/index.html`),
 
 ```js
 window.__inspector3d = {
-  attach, stats, renderer, scene, camera, composer, controls, seleccion,
+  attach, stats, renderer, scene, camera, composer, controls, seleccion, recompilaciones, listo(),
   select(obj, instanceId?), set(nombre, valor), copiarCamara(), copiarObjeto(), memoria(), origen(obj), pila(obj)
 }
 ```
 
 - `stats`: objeto plano `{fps, ms, msMax, calls, tris, lineas, puntos, geometrias, texturas, programas, heapMB}`. Lo puede leer otra herramienta (por ejemplo `--extra "window.__inspector3d?.stats"`).
 - `seleccion`: `{ objeto, instanceId } | null`.
+- `recompilaciones` (v0.2): `[{ t, nuevos, total, causas: [texto], materiales: [texto] }]`, una por cada vez que aparecieron programas nuevos después del arranque. `listo()` marca el fin del arranque a mano; si no, el arranque termina tras 3 s sin programas nuevos.
 - `origen(obj)`: `archivo:línea`; `pila(obj)`: la pila corta. `attach({ saltar: [...] })` fija los helpers a saltar.
 - `set(nombre, valor)`: `'sombras'`, `'luces'`, `'luz:<i>'`, `'niebla'`, `'post'`, `'pase:<i>'` con booleano; `'pixelRatio'` con número, `'dpr'` u `'original'`.
 
@@ -94,6 +95,20 @@ window.__inspector3d = {
 - Origen: se parchea `Object3D.prototype.add` y se guarda un `Error` por hijo la primera vez que se agrega (24 frames: el límite se sube solo durante esa captura, no se toca `Error.stackTraceLimit` de la app). La pila se procesa solo al mostrarla: se descartan los frames de three y del inspector y los helpers de `saltar`. Solo en modo debug.
 - Conteo: diferencia de `info.render` antes y después de cada `render`, acumulada y publicada por un rAF propio, que corre antes que el bucle de la app.
 
+## Vigía de recompilaciones (v0.2)
+
+Después del arranque, un programa nuevo en `renderer.info.programs` es una recompilación: three detiene el hilo principal mientras compila, segundos en D3D11 con muchas luces, y el 3D se ve congelado aunque el HTML siga animando. Cada 0.5 s el vigía guarda la firma de cada luz (visible de verdad, es decir, ella y todos sus padres, y `castShadow`) y `shadowMap.type`. Cuando aparecen programas nuevos, dice qué cambió respecto a la **última compilación**:
+
+- `foco se ocultó por grupoFoco ((anón) /prueba/:54)`: la luz o el padre que la ocultó, con la línea donde se agregó;
+- `punto agregada (…)`, `… quitada de la escena`, `….castShadow false → true`, `shadowMap.type 1 → 2`;
+- si no cambió ninguna luz: `material(es) nuevo(s) o que se dibujan por primera vez`, con los materiales y sus objetos.
+
+Se ve en la sección "⚠ Recompilaciones (n)" del panel (en rojo) y como `console.warn('[inspector-3d] recompilación: …')`. Si se vuelve a una combinación de luces que three aún tiene en caché, no hay compilación y tampoco aviso.
+
+Regla para no caer en esto: no cambiar en marcha el número de luces visibles, `castShadow` ni `shadowMap.type`. Un objeto con luz se esconde moviéndolo, no con `visible = false`; las luces nocturnas se apagan con intensidad 0; los cambios de calidad que tocan luces o sombras se fijan al arrancar, antes de `compileAsync`.
+
+El panel también marca `⚠ cuadro de X s` en las stats cuando un cuadro tarda más de 1 s.
+
 ## Costes y límites
 
 - El resaltado es un `Box3Helper` que está en la escena **solo mientras hay selección**: suma 1 draw call y 12 líneas. Su caja se recalcula al seleccionar y 4 veces por segundo (no por cuadro); un objeto que se mueve rápido se ve con la caja un poco atrasada.
@@ -101,6 +116,7 @@ window.__inspector3d = {
 - Apagar sombras o luces cambia los shaders: espera un tirón al recompilar.
 - Se mide la cadencia de rAF, no el tiempo de GPU. Para eso combina con [stats-gl](https://github.com/RenaudRohlinger/stats-gl); para capturar un cuadro, [Spector.js](https://spector.babylonjs.com/).
 - Solo `WebGLRenderer` de r160 (el hook de devtools existe en r1xx; el Inspector oficial de r187 es solo para `WebGPURenderer`).
+- El vigía recorre la escena cada 0.5 s buscando luces (y los materiales, solo cuando hubo programas nuevos).
 - Fuera de v0.1: buscador, wireframe, edición de transformaciones y persistencia del panel.
 
 ## Prueba

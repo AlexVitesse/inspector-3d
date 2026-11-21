@@ -94,7 +94,13 @@ async function probar() {
     assert.ok(d.camara.dPos < 1e-3 && d.camara.dRot < 1e-6, `copiarCamara reproduce la pose (${JSON.stringify(d.camara)})`);
     assert.ok(d.copiarObjeto && d.memoria.geometrias >= 4, 'copiarObjeto y memoria');
     assert.ok(pedidos.includes('/inspector.js'));
-    console.log('debug=1 ok:', JSON.stringify({ stats: d.stats, origen: d.seleccion.origen, pila: d.origenDer.pila, memoria: d.memoria }));
+    const lf = linea('MARCA-FOCO');
+    assert.ok(d.recomp?.length >= 2, `vigía: ${JSON.stringify(d.recomp)}`);
+    const lq = linea('MARCA-PUNTO');
+    assert.ok(/foco se ocultó por grupoFoco \(.*\/prueba\/:/.test(d.recomp[0]) && d.recomp[0].includes(`/prueba/:${lf}`), `vigía, oculta: ${d.recomp[0]}`);
+    assert.ok(d.recomp[1].includes('punto agregada') && d.recomp[1].includes(`/prueba/:${lq}`), `vigía, agregada: ${d.recomp[1]}`);
+    assert.ok(d.panelRc, 'el panel muestra la recompilación');
+    console.log('debug=1 ok:', JSON.stringify({ stats: d.stats, origen: d.seleccion.origen, pila: d.origenDer.pila, memoria: d.memoria, recomp: d.recomp }));
     // 2) sin ?debug: nada
     pedidos.length = 0;
     const o = await cargar(chrome, puerto, three && '?' + three);

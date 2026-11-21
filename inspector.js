@@ -1,4 +1,4 @@
-// inspector-3d v0.1.1 — panel de depuración para gemelos three.js r160 (MIT).
+// inspector-3d v0.2.0 — panel de depuración para gemelos three.js r160 (MIT).
 // Se activa con ?debug=1. Sin ese parámetro no hace nada (ni DOM, ni globales, ni parches).
 // Encuentra renderer, escena, cámara y composer solo, por el hook __THREE_DEVTOOLS__ de three; attach() es el respaldo.
 import * as THREE from 'three';
@@ -72,23 +72,76 @@ function iniciar() {
   if (iniciado) return; iniciado = true;
   window.__inspector3d = api;
   construirUI();
-  let ult = performance.now(), n = 0, suma = 0, max = 0, tPub = ult;
+  let ult = performance.now(), tPub = ult; const vent = [];   // [t, d] del último segundo: fps estable aunque un cuadro dure segundos
   const cuadro = (t) => {
     const d = t - ult; ult = t;
-    if (d > 0 && !document.hidden) { n++; suma += d; max = Math.max(max, d); }
+    if (d > 0 && !document.hidden) vent.push([t, d]);
+    while (vent.length && t - vent[0][0] > 1000) vent.shift();
     stats.calls = acum.calls; stats.tris = acum.tris; stats.lineas = acum.lineas; stats.puntos = acum.puntos;
     acum.calls = acum.tris = acum.lineas = acum.puntos = 0;
     if (t - tPub >= 250) {
       const info = S.renderer?.info;
+      const n = vent.length, suma = vent.reduce((a, x) => a + x[1], 0), max = vent.reduce((a, x) => Math.max(a, x[1]), 0);
       Object.assign(stats, { fps: n ? +(1000 * n / suma).toFixed(1) : 0, ms: n ? +(suma / n).toFixed(2) : 0, msMax: +max.toFixed(2),
         geometrias: info?.memory.geometries ?? 0, texturas: info?.memory.textures ?? 0, programas: info?.programs?.length ?? 0,
         heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 2 ** 20).toFixed(1) : null });
-      n = suma = max = 0; tPub = t; pintarStats(); prepararHelper();
+      tPub = t; pintarStats(); prepararHelper();
+      if (t - vig.tRev >= 500) { vig.tRev = t; vigilar(t); }
     }
     requestAnimationFrame(cuadro);
   };
   requestAnimationFrame(cuadro);
   addEventListener('pointerdown', altClic, true);
+}
+
+// ---------------- vigía de recompilaciones
+// Después del arranque, un programa nuevo en renderer.info.programs es una recompilación: congela el hilo principal
+// (segundos en D3D11 con muchas luces). Casi siempre la causa es que cambió el conteo de luces (una luz, o un padre
+// suyo, se ocultó o se mostró; una luz se agregó o se quitó), castShadow o shadowMap.type. El vigía guarda la firma
+// de cada luz y, al ver programas nuevos, dice qué cambió, qué objeto lo hizo y en qué línea se agregó.
+// "Listo" = 3 s sin programas nuevos desde el primer render de la escena principal, o api.listo().
+const vig = { vistos: new Set(), listo: false, tUlt: 0, tRev: 0, luces: new Map(), tipo: null, alertas: [], escena: null };
+const ocultoPor = (o) => { for (let a = o; a; a = a.parent) if (!a.visible) return a; return null; };   // three no junta una luz si ella o un padre está oculto
+const firmaLuz = (l) => { const h = ocultoPor(l); return { vis: !h, sombra: !!l.castShadow, por: h }; };
+function vigilar(t) {
+  const r = S.renderer; if (!r || !S.scene) return;
+  // el arranque cuenta desde el primer render de la escena principal (antes puede haber una pantalla de carga larga sin
+  // programas nuevos, y la compilación de la escena se tomaría como recompilación)
+  if (vig.escena !== S.scene) { vig.escena = S.scene; if (!vig.listoManual) { vig.listo = false; vig.tUlt = t; } }
+  const progs = r.info.programs || [], nuevos = progs.filter((p) => !vig.vistos.has(p.id));
+  for (const p of nuevos) vig.vistos.add(p.id);
+  const luces = new Map(); S.scene.traverse((o) => { if (o.isLight && !esHelper(o)) luces.set(o, firmaLuz(o)); });
+  if (nuevos.length && vig.listo) {
+    const causas = [], nom = (o) => o.name || o.type, sitio = (o) => { const x = origen(o); return x.corta || x.texto; };
+    for (const [l, f] of luces) {
+      const a = vig.luces.get(l);
+      if (!a) causas.push(`${nom(l)} agregada (${sitio(l)})`);
+      else if (a.vis !== f.vis) causas.push(f.vis ? `${nom(l)} se mostró${a.por ? ` (la ocultaba ${nom(a.por)}, ${sitio(a.por)})` : ''}` : `${nom(l)} se ocultó por ${nom(f.por)} (${sitio(f.por)})`);
+      else if (a.sombra !== f.sombra) causas.push(`${nom(l)}.castShadow ${a.sombra} → ${f.sombra} (${sitio(l)})`);
+    }
+    for (const [l] of vig.luces) if (!luces.has(l)) causas.push(`${nom(l)} quitada de la escena (${sitio(l)})`);
+    if (vig.tipo != null && vig.tipo !== r.shadowMap.type) causas.push(`shadowMap.type ${vig.tipo} → ${r.shadowMap.type}`);
+    const mats = [], set = new Set(nuevos);
+    S.scene.traverse((o) => {
+      if (!o.material || esHelper(o) || mats.length >= 8) return;
+      for (const m of [o.material].flat()) if (set.has(r.properties.get(m).currentProgram) && !mats.some((x) => x.m === m)) mats.push({ m, o });
+    });
+    const a = { t: +(t / 1000).toFixed(1), nuevos: nuevos.length, total: progs.length, causas,
+      materiales: mats.map(({ m, o }) => `${m.type}${m.name ? ` "${m.name}"` : ''} en ${nom(o)} (${origen(o).texto})`) };
+    if (!causas.length) causas.push(mats.length ? 'material(es) nuevo(s) o que se dibujan por primera vez' : 'programas fuera de la escena principal (otra escena, PMREM, postproceso)');
+    vig.alertas.push(a);
+    console.warn(`[inspector-3d] recompilación: +${a.nuevos} programas · ${a.causas.join(' · ')}`, a);
+    pintarAlertas();
+  }
+  if (nuevos.length) vig.tUlt = t; else if (!vig.listo && progs.length && t - vig.tUlt > 3000) vig.listo = true;
+  // la base es la firma de la ÚLTIMA compilación, no la de la última revisión: el vigía puede correr entre el cambio
+  // (app) y el render que compila, y entonces ya vería la luz nueva como parte de la base
+  if (nuevos.length || !vig.listo) { vig.luces = luces; vig.tipo = r.shadowMap.type; }
+}
+function pintarAlertas() {
+  const c = ui?.querySelector('.i3-rc'); if (!c) return;
+  const d = c.closest('details'); d.querySelector('summary').textContent = `⚠ Recompilaciones (${vig.alertas.length})`; d.classList.add('i3-alerta');
+  c.textContent = vig.alertas.slice(-8).reverse().map((a) => `t ${a.t} s · +${a.nuevos} programas (total ${a.total})\n  ${a.causas.join('\n  ')}${a.materiales.length ? '\n  materiales: ' + a.materiales.slice(0, 4).join('; ') : ''}`).join('\n\n');
 }
 
 // ---------------- utilidades de escena
@@ -278,7 +331,7 @@ function memoria() {
 const CSS = `
 .i3{position:fixed;top:8px;left:8px;z-index:2147483000;width:330px;max-height:calc(100vh - 16px);overflow:auto;background:rgba(10,14,20,.92);color:#e6edf3;
  font:11px/1.4 ui-monospace,Consolas,monospace;border:1px solid #30363d;border-radius:6px;padding:4px 6px}
-.i3 summary{cursor:pointer;user-select:none} .i3>details>summary{font-weight:700;color:#7ee787;padding:2px 0}
+.i3 summary{cursor:pointer;user-select:none} .i3 .i3-alerta>summary{color:#ff7b72} .i3-rc{white-space:pre-wrap;max-height:240px;overflow:auto} .i3>details>summary{font-weight:700;color:#7ee787;padding:2px 0}
 .i3 button{font:inherit;background:#21262d;color:inherit;border:1px solid #30363d;border-radius:4px;padding:1px 6px;margin:1px;cursor:pointer}
 .i3 .i3-n{padding-left:10px} .i3 .i3-n summary:hover{background:#1f2937} .i3 .i3-k{color:#8b949e}
 .i3 table{border-collapse:collapse;width:100%} .i3 td{padding:0 3px;vertical-align:top} .i3 td:first-child{color:#8b949e;white-space:nowrap}
@@ -295,6 +348,7 @@ function construirUI() {
     seccion('Top coste', false, el('button', { textContent: 'Refrescar', onclick: pintarTop }), el('ol', { className: 'i3-top' })),
     seccion('Selección (Alt+clic)', true, el('div', { className: 'i3-ficha', textContent: 'nada' })),
     seccion('Toggles', false, el('div', { className: 'i3-tog' })),
+    seccion('Recompilaciones (0)', false, el('pre', { className: 'i3-rc', textContent: 'ninguna después del arranque' })),
     el('div', {}, el('button', { textContent: 'Copiar cámara', onclick: copiarCamara }), el('div', { className: 'i3-sal' })),
   );
   ui.querySelectorAll('details').forEach((d) => d.addEventListener('toggle', () => {
@@ -307,7 +361,7 @@ function construirUI() {
 function pintarStats() {
   const p = ui?.querySelector('.i3-stats'); if (!p) return;
   const s = stats;
-  p.textContent = `${s.fps} fps · ${s.ms} ms (máx ${s.msMax})\n${s.calls} calls · ${(s.tris / 1e3).toFixed(1)} k tris · ${s.lineas} lín · ${s.puntos} pts\n` +
+  p.textContent = `${s.msMax > 1000 ? `⚠ cuadro de ${(s.msMax / 1000).toFixed(1)} s\n` : ''}${s.fps} fps · ${s.ms} ms (máx ${s.msMax})\n${s.calls} calls · ${(s.tris / 1e3).toFixed(1)} k tris · ${s.lineas} lín · ${s.puntos} pts\n` +
     `geo ${s.geometrias} · tex ${s.texturas} · prog ${s.programas}${s.heapMB != null ? ` · heap ${s.heapMB} MB` : ''}` +
     (S.scene ? '' : '\n(sin escena: ¿se cargó antes que el renderer? usa attach())');
 }
@@ -366,7 +420,7 @@ function pintarToggles() {
 }
 
 const api = {
-  attach, stats, select, set, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto, pila: (o) => origen(o).corta,
+  attach, stats, select, set, listo: () => { vig.listo = vig.listoManual = true; }, get recompilaciones() { return vig.alertas; }, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto, pila: (o) => origen(o).corta,
   get renderer() { return S.renderer; }, get scene() { return S.scene; }, get camera() { return S.camera; },
   get composer() { return S.composer; }, get controls() { return S.controls; }, get seleccion() { return sel; },
 };

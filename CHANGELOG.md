@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versiones con [SemVer](https://semver.org/lang/es/).
 
+## [0.2.0] - 2026-11-20
+
+### Agregado
+- Vigía de recompilaciones: después del arranque avisa cuando aparecen programas nuevos y dice la causa (una luz o un padre suyo se ocultó o se mostró, una luz se agregó o se quitó, cambió `castShadow` o `shadowMap.type`), con el objeto y la línea donde se agregó; si no cambió ninguna luz, lista los materiales nuevos. Sección "⚠ Recompilaciones (n)" en el panel, `console.warn` y `api.recompilaciones`; `api.listo()` marca el fin del arranque a mano.
+- Las stats marcan `⚠ cuadro de X s` cuando un cuadro tarda más de 1 s.
+
+### Pruebas
+- `prueba/index.html`: un foco dentro de un grupo que se oculta y una luz puntual que se agrega; `prueba.mjs` comprueba causa y línea.
+
 ## [0.1.1] - 2026-11-20
 
 ### Corregido
