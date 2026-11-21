@@ -1,4 +1,4 @@
-// inspector-3d v0.1.0 — panel de depuración para gemelos three.js r160 (MIT).
+// inspector-3d v0.1.1 — panel de depuración para gemelos three.js r160 (MIT).
 // Se activa con ?debug=1. Sin ese parámetro no hace nada (ni DOM, ni globales, ni parches).
 // Encuentra renderer, escena, cámara y composer solo, por el hook __THREE_DEVTOOLS__ de three; attach() es el respaldo.
 import * as THREE from 'three';
@@ -6,10 +6,12 @@ import * as THREE from 'three';
 const ON = new URLSearchParams(location.search).get('debug') === '1';
 const MARCA = '__inspector3d';                  // userData del resaltado: fuera del árbol, del raycast y del coste
 const origenes = new WeakMap();                  // hijo → Error de la primera vez que se agregó
+const PROF = 24;                                 // frames que guarda ese Error (three + helpers de la app + llamador); no toca el límite global
 const S = { renderer: null, scene: null, camera: null, composer: null, controls: null };
 const stats = { fps: 0, ms: 0, msMax: 0, calls: 0, tris: 0, lineas: 0, puntos: 0, geometrias: 0, texturas: 0, programas: 0, heapMB: null };
 const acum = { calls: 0, tris: 0, lineas: 0, puntos: 0 };
 const orig = {};                                 // valores originales de los toggles: todo se puede revertir
+const cfg = { saltar: [] };                      // funciones helper que el origen se salta (attach({saltar}) o window.__inspector3dSaltar)
 let sel = null, helper = null, ui = null, iniciado = false;
 
 // ---------------- enganche
@@ -19,17 +21,16 @@ function envolverRenderer(r) {
   r.render = function (scene, camera) {
     if (scene?.isScene && !esHelper(scene)) {
       if (!S.scene || (scene !== S.scene && scene.children.length > S.scene.children.length)) S.scene = scene;
-      if (scene === S.scene) { S.camera = camera; S.renderer ??= this; prepararHelper(); }
+      if (scene === S.scene) { S.camera = camera; S.renderer ??= this; }
     }
     // r160 reinicia info DESPUÉS de dibujar el mapa de sombras si autoReset es true: se apaga solo durante esta llamada
     // para que las sombras cuenten igual que en una app con autoReset = false. El valor de la app se restaura al salir.
     const info = this.info, auto = info.autoReset;
     if (auto) { info.autoReset = false; info.reset(); }
-    const r0 = info.render, a = [r0.calls, r0.triangles, r0.lines, r0.points];
+    const r0 = info.render, c0 = r0.calls, t0 = r0.triangles, l0 = r0.lines, p0 = r0.points;
     try { return render.call(this, scene, camera); }
     finally {
-      const r1 = info.render;
-      acum.calls += r1.calls - a[0]; acum.tris += r1.triangles - a[1]; acum.lineas += r1.lines - a[2]; acum.puntos += r1.points - a[3];
+      acum.calls += r0.calls - c0; acum.tris += r0.triangles - t0; acum.lineas += r0.lines - l0; acum.puntos += r0.points - p0;
       info.autoReset = auto;
     }
   };
@@ -46,13 +47,18 @@ function parcharAdd() {
   const add = THREE.Object3D.prototype.add;
   if (add.__insp) return;
   THREE.Object3D.prototype.add = function (...objs) {
-    for (const o of objs) if (o && o !== this && !origenes.has(o)) origenes.set(o, new Error());
+    for (let i = 0; i < objs.length; i++) {
+      const o = objs[i];
+      if (!o || o === this || origenes.has(o)) continue;
+      const lim = Error.stackTraceLimit; Error.stackTraceLimit = PROF; origenes.set(o, new Error()); Error.stackTraceLimit = lim;
+    }
     return add.apply(this, objs);
   };
   THREE.Object3D.prototype.add.__insp = true;
 }
 
 export function attach(o = {}) {
+  if (Array.isArray(o.saltar)) cfg.saltar = o.saltar.map(String);
   for (const k of Object.keys(S)) if (o[k]) S[k] = o[k];   // claves desconocidas se ignoran: attach(window.miApp) funciona
   if (S.renderer) envolverRenderer(S.renderer);
   if (S.composer) S.renderer ??= S.composer.renderer;
@@ -77,7 +83,7 @@ function iniciar() {
       Object.assign(stats, { fps: n ? +(1000 * n / suma).toFixed(1) : 0, ms: n ? +(suma / n).toFixed(2) : 0, msMax: +max.toFixed(2),
         geometrias: info?.memory.geometries ?? 0, texturas: info?.memory.textures ?? 0, programas: info?.programs?.length ?? 0,
         heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 2 ** 20).toFixed(1) : null });
-      n = suma = max = 0; tPub = t; pintarStats();
+      n = suma = max = 0; tPub = t; pintarStats(); prepararHelper();
     }
     requestAnimationFrame(cuadro);
   };
@@ -105,19 +111,28 @@ function resumen(o, soloVisibles) {
   ir(o);
   return { n, tris, calls };
 }
-function origen(o) {
-  const e = origenes.get(o);
-  if (e?.stack) {
-    for (const l of e.stack.split('\n').slice(1)) {
-      const m = l.match(/\(?((?:https?|file):\/\/[^\s)]+?):(\d+):\d+\)?\s*$/);
-      if (!m || /three\.module|\/three\/|\/three@|inspector\.js/.test(m[1])) continue;
-      let f = m[1]; try { f = new URL(f).pathname; } catch { /* ruta cruda */ }
-      return { texto: `${f.split('/').pop()}:${m[2]}`, pila: e.stack };
-    }
+// Chrome "    at [async|new] fn (url:l:c)" o "    at url:l:c"; Firefox y Safari "fn@url:l:c"
+const RE_FRAME = /^\s*(?:at\s+)?(?:(?:async\s+|new\s+)?([^\s(@]*)\s*[(@])?\(?((?:https?|file):\/\/[^\s)]+?):(\d+):\d+\)?\s*$/;
+function frames(stack) {
+  const r = [];
+  for (const l of stack.split('\n').slice(1)) {
+    const m = l.match(RE_FRAME);
+    if (!m || /three\.module|\/three\/|\/three@|inspector\.js/.test(m[2])) continue;
+    let f = m[2]; try { f = new URL(f).pathname; } catch { /* ruta cruda */ }
+    r.push({ fn: (m[1] || '').split('.').pop(), sitio: `${f.split('/').pop() || f}:${m[3]}` });   // "/" o "/app/": se muestra el path
   }
-  if (o.userData?.modulo) return { texto: String(o.userData.modulo), pila: '' };
+  return r;
+}
+function origen(o) {
+  const e = origenes.get(o), fs = e?.stack ? frames(e.stack) : [];
+  if (fs.length) {
+    const saltar = new Set([...cfg.saltar, ...(Array.isArray(window.__inspector3dSaltar) ? window.__inspector3dSaltar : [])]);
+    const i = Math.max(0, fs.findIndex((x) => !saltar.has(x.fn)));   // si todos son saltables, el primero
+    return { texto: fs[i].sitio, corta: fs.slice(i, i + 3).map((x) => `${x.fn || '(anón)'} ${x.sitio}`).join(' ← '), pila: e.stack };
+  }
+  if (o.userData?.modulo) return { texto: String(o.userData.modulo), corta: '', pila: '' };
   let a = o; while (a.parent && a.parent !== S.scene) a = a.parent;
-  return { texto: a !== o && a.parent === S.scene ? `(en ${a.name || a.type})` : '—', pila: '' };
+  return { texto: a !== o && a.parent === S.scene ? `(en ${a.name || a.type})` : '—', corta: '', pila: '' };
 }
 function ruta(o) { const r = []; for (let a = o; a; a = a.parent) r.unshift(a.name || a.type); return r.join(' › '); }
 function jsonSeguro(v, max = 2048) {
@@ -138,8 +153,9 @@ function jsonSeguro(v, max = 2048) {
 }
 
 // ---------------- selección y resaltado
+// resaltado: está en la escena solo mientras hay selección; la caja se recalcula al seleccionar y a 4 Hz
 function prepararHelper() {
-  if (!sel || !S.scene) { if (helper) helper.visible = false; return; }
+  if (!sel || !S.scene) { helper?.removeFromParent(); return; }
   if (!helper) {
     helper = new THREE.Box3Helper(new THREE.Box3(), 0xff00ff);
     helper.material.depthTest = false; helper.material.transparent = true; helper.renderOrder = 1e9;
@@ -151,7 +167,7 @@ function prepararHelper() {
     const g = o.geometry; if (!g.boundingBox) g.computeBoundingBox();
     o.updateWorldMatrix(true, false);
     o.getMatrixAt(sel.instanceId, _m); b.copy(g.boundingBox).applyMatrix4(_m.premultiply(o.matrixWorld));
-  } else b.setFromObject(o);   // ponytail: recorre el subárbol cada cuadro; con la escena entera seleccionada cuesta, cachear si molesta
+  } else b.setFromObject(o);   // ponytail: recorre el subárbol 4 veces por segundo; con la escena entera seleccionada cuesta
   helper.visible = !b.isEmpty() && o !== S.scene;
 }
 const _m = new THREE.Matrix4();
@@ -169,10 +185,19 @@ function altClic(e) {
   _p.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(_p, S.camera);
   ray.layers.mask = S.camera.layers.mask;
-  const visible = (o) => { for (let a = o; a; a = a.parent) if (!a.visible || esHelper(a)) return false; return true; };
   let hit = null;
-  try { hit = ray.intersectObject(S.scene, true).find((h) => visible(h.object)); } catch (err) { console.warn('[inspector] raycast', err); }
+  try { hit = ray.intersectObject(S.scene, true).find(seVe); } catch (err) { console.warn('[inspector] raycast', err); }
   select(hit?.object || null, hit?.instanceId);
+}
+
+// lo que el Alt+clic puede elegir: ancestros visibles, sin helpers (de three, del inspector o con userData.inspectorIgnorar)
+// y con algún material que se dibuja. Las capas de la cámara ya las filtra el Raycaster (ray.layers).
+const esAux = (a) => esHelper(a) || !!a.userData?.inspectorIgnorar || /Helper$/.test(a.type || '');
+function seVe(h) {
+  for (let a = h.object; a; a = a.parent) if (!a.visible || esAux(a)) return false;
+  const m = h.object.material;
+  const ms = Array.isArray(m) ? (h.face?.materialIndex != null && m[h.face.materialIndex] ? [m[h.face.materialIndex]] : m) : [m];
+  return ms.some((x) => !x || (x.visible !== false && !(x.transparent && x.opacity <= 0)));
 }
 
 // ---------------- toggles (cada uno guarda el original)
@@ -308,7 +333,7 @@ function pintarFicha() {
   const w = o.getWorldPosition(new THREE.Vector3());
   const mats = [o.material].flat().filter(Boolean).map((m) => `${m.type}${m.name ? ' "' + m.name + '"' : ''} transp=${m.transparent} side=${m.side}`).join('\n');
   const filas = [
-    ['nombre', `${o.name || '(sin nombre)'} · ${o.type}${sel.instanceId != null ? ` · instancia ${sel.instanceId}` : ''}`], ['ruta', ruta(o)], ['origen', ori.texto],
+    ['nombre', `${o.name || '(sin nombre)'} · ${o.type}${sel.instanceId != null ? ` · instancia ${sel.instanceId}` : ''}`], ['ruta', ruta(o)], ['origen', ori.texto], ...(ori.corta ? [['pila', ori.corta]] : []),
     ['visible', String(o.visible)], ['local', v3(o.position)], ['mundo', v3(w)],
     ...(g ? [['geometría', `${g.attributes.position?.count ?? 0} vért · ${(trisDe(o) / instDe(o))} tris · ${instDe(o)} inst`]] : []),
     ...(mats ? [['materiales', mats]] : []),
@@ -341,14 +366,13 @@ function pintarToggles() {
 }
 
 const api = {
-  attach, stats, select, set, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto,
+  attach, stats, select, set, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto, pila: (o) => origen(o).corta,
   get renderer() { return S.renderer; }, get scene() { return S.scene; }, get camera() { return S.camera; },
   get composer() { return S.composer; }, get controls() { return S.controls; }, get seleccion() { return sel; },
 };
 
 // al final: api y las constantes de arriba ya existen cuando arranca
 if (ON) {
-  Error.stackTraceLimit = Math.max(Error.stackTraceLimit || 10, 40);
   const dt = (self.__THREE_DEVTOOLS__ ??= new EventTarget());
   dt.addEventListener('observe', (e) => {
     const d = e.detail;

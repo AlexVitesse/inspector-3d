@@ -25,7 +25,7 @@ const srv = http.createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
     res.end('ok'); alRecibir?.(JSON.parse(b)); return;
   }
-  const f = normalize(join(RAIZ, ruta));
+  const f = normalize(join(RAIZ, ruta.endsWith('/') ? ruta + 'index.html' : ruta));
   if (!f.startsWith(RAIZ) || /[\\/]\./.test(ruta)) { res.writeHead(404).end(); return; }
   try { const d = await readFile(f); res.writeHead(200, { 'Content-Type': TIPOS[extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' }).end(d); }
   catch { res.writeHead(404).end(); }
@@ -49,11 +49,11 @@ function matar(pid) {
   try { if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); else process.kill(pid, 'SIGKILL'); } catch { /* ya salió */ }
 }
 
-async function cargar(chrome, puerto, qs) {
+async function cargar(chrome, puerto, qs, pagina = 'prueba/index.html') {
   const perfil = await mkdtemp(join(tmpdir(), 'inspector3d-'));
   const gpu = process.platform === 'linux' ? ['--use-gl=angle', '--use-angle=gl-egl'] : [];
   const flags = ['--headless=new', `--user-data-dir=${perfil}`, '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', ...gpu,
-    '--no-first-run', '--no-default-browser-check', '--window-size=1280,800', `http://127.0.0.1:${puerto}/prueba/index.html${qs}`];
+    '--no-first-run', '--no-default-browser-check', '--window-size=1280,800', `http://127.0.0.1:${puerto}/${pagina}${qs}`];
   const proc = spawn(chrome, flags, { stdio: 'ignore' });
   try {
     return await new Promise((ok, mal) => {
@@ -72,22 +72,29 @@ async function probar() {
   if (!chrome) { console.error('No encontré Chrome. Pasa --chrome <ruta> o la variable CHROME.'); process.exit(1); }
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
   const puerto = srv.address().port, three = A.three ? `three=${encodeURIComponent(A.three)}` : '';
-  const linea = readFileSync(join(RAIZ, 'prueba/index.html'), 'utf8').split('\n').findIndex((l) => l.includes('MARCA-CENTRAL')) + 1;
+  const lineas = readFileSync(join(RAIZ, 'prueba/index.html'), 'utf8').split('\n'), linea = (m) => lineas.findIndex((l) => l.includes(m)) + 1;
   try {
-    // 1) con ?debug=1
-    const d = await cargar(chrome, puerto, `?debug=1${three && '&' + three}`);
+    // 1) con ?debug=1, abierta como directorio (/prueba/ y no /prueba/index.html): el origen debe llevar el path
+    const d = await cargar(chrome, puerto, `?debug=1${three && '&' + three}`, 'prueba/');
     console.log('GPU:', d.gpu);
     assert.deepEqual(d.fallos, [], 'la página reportó fallos');
     assert.deepEqual(d.enganche, { renderer: true, scene: true, camera: true, composer: true }, 'enganche sin attach()');
     assert.equal(d.stats.calls, d.esperado.calls, 'stats.calls'); assert.equal(d.stats.tris, d.esperado.tris, 'stats.tris');
     assert.equal(d.seleccion?.nombre, 'central', 'Alt+clic en el centro'); assert.ok(d.seleccion.trisFicha, 'la ficha muestra 80 tris');
-    assert.equal(d.seleccion.origen, `index.html:${linea}`, 'origen');
+    assert.ok(d.trampasDelante, 'hay trampas delante de central');
+    assert.equal(d.seleccion.origen, `/prueba/:${linea('MARCA-CENTRAL')}`, 'origen con la página abierta como /');
     assert.deepEqual(d.statsConResaltado, { calls: d.esperado.calls + 1, lineas: 12 }, 'el resaltado suma 1 call y 12 líneas');
+    assert.equal(d.statsSinSeleccion, d.esperado.calls, 'sin selección el resaltado sale de la escena');
+    const lp = linea('MARCA-PONER'), ld = linea('MARCA-DER');
+    assert.equal(d.origenDer.base, `/prueba/:${lp}`, 'origen sin saltar: el helper');
+    assert.equal(d.origenDer.pila, `poner /prueba/:${lp} ← (anón) /prueba/:${ld}`, 'pila corta');
+    assert.equal(d.origenDer.global, `/prueba/:${ld}`, 'window.__inspector3dSaltar');
+    assert.equal(d.origenDer.attach, `/prueba/:${ld}`, 'attach({saltar})');
     for (const [k, v] of Object.entries(d.toggles)) assert.deepEqual(v, { cambia: true, restaura: true }, `toggle ${k}`);
     assert.ok(d.camara.dPos < 1e-3 && d.camara.dRot < 1e-6, `copiarCamara reproduce la pose (${JSON.stringify(d.camara)})`);
     assert.ok(d.copiarObjeto && d.memoria.geometrias >= 4, 'copiarObjeto y memoria');
     assert.ok(pedidos.includes('/inspector.js'));
-    console.log('debug=1 ok:', JSON.stringify({ stats: d.stats, origen: d.seleccion.origen, memoria: d.memoria }));
+    console.log('debug=1 ok:', JSON.stringify({ stats: d.stats, origen: d.seleccion.origen, pila: d.origenDer.pila, memoria: d.memoria }));
     // 2) sin ?debug: nada
     pedidos.length = 0;
     const o = await cargar(chrome, puerto, three && '?' + three);

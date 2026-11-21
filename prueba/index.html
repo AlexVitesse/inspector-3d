@@ -42,7 +42,9 @@ const central = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.Me
 central.name = 'central'; central.castShadow = true;
 scene.add(central); // MARCA-CENTRAL
 const der = new THREE.Mesh(new THREE.TetrahedronGeometry(0.8), new THREE.MeshLambertMaterial({ color: 0x4444cc })); // 4 tris
-der.name = 'derecha'; der.position.x = 2.5; scene.add(der);
+der.name = 'derecha'; der.position.x = 2.5;
+const poner = (padre, o) => padre.add(o); // MARCA-PONER (helper genérico, como un add() local)
+poner(scene, der); // MARCA-DER
 const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({ color: 0xffffff }), 10); // 12 × 10
 inst.name = 'fila'; const m = new THREE.Matrix4();
 for (let i = 0; i < 10; i++) inst.setMatrixAt(i, m.makeTranslation(-4.5 + i, -1.8, -2));
@@ -72,13 +74,28 @@ try {
   if (I) {
     R.enganche = { renderer: I.renderer === renderer, scene: I.scene === scene, camera: I.camera === camera, composer: I.composer === composer };
     R.stats = { ...I.stats };
+    // trampas entre la cámara y "central": el Alt+clic debe atravesarlas (se quitan antes del siguiente cuadro)
+    const plano = (mat, ud = {}) => { const t = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial(mat)); t.position.z = 3; Object.assign(t.userData, ud); return t; };
+    const grupo = new THREE.Group(); grupo.userData.inspectorIgnorar = true; grupo.add(plano({}));
+    const trampas = [plano({ visible: false }), plano({ transparent: true, opacity: 0 }), plano({}, { inspectorIgnorar: true }), plano({}), plano({}), new THREE.GridHelper(2, 4), grupo];
+    trampas[3].layers.set(2); trampas[4].visible = false; trampas[5].rotation.x = Math.PI / 2; trampas[5].position.z = 2;
+    scene.add(...trampas); scene.updateMatrixWorld();
+    const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(0, 0), camera); rc.layers.enableAll();
+    R.trampasDelante = rc.intersectObject(scene, true)[0]?.object !== central;
     // Alt+clic en el centro del canvas
     const r = renderer.domElement.getBoundingClientRect();
     renderer.domElement.dispatchEvent(new PointerEvent('pointerdown', { altKey: true, bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+    scene.remove(...trampas);
     const s = I.seleccion;
     R.seleccion = s && { nombre: s.objeto.name, tris: 80, trisFicha: document.querySelector('.i3-ficha')?.textContent.includes('80 tris'), origen: I.origen(s.objeto) };
     await cuadros(3);
     R.statsConResaltado = { calls: I.stats.calls, lineas: I.stats.lineas };
+    I.select(null); await cuadros(3); R.statsSinSeleccion = I.stats.calls;
+    I.select(central);
+    // origen con helper genérico: por defecto marca el helper; con saltar, el llamador
+    R.origenDer = { base: I.origen(der), pila: I.pila(der) };
+    window.__inspector3dSaltar = ['poner']; R.origenDer.global = I.origen(der); delete window.__inspector3dSaltar;
+    I.attach({ saltar: ['poner'] }); R.origenDer.attach = I.origen(der); I.attach({ saltar: [] });
     // toggles: cambian y restauran exacto
     const t = {};
     const prueba = (nombre, leer, off = false, on = true) => {
