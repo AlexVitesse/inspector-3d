@@ -119,6 +119,18 @@ El panel también marca `⚠ cuadro de X s` en las stats cuando un cuadro tarda 
 - El vigía recorre la escena cada 0.5 s buscando luces (y los materiales, solo cuando hubo programas nuevos).
 - Fuera de v0.1: buscador, wireframe, edición de transformaciones y persistencia del panel.
 
+## Límites conocidos y pendientes (revisión externa, nov-2026)
+
+Se aceptan por ahora; se resolverán si un caso real los necesita.
+
+- **Causa vieja:** si ocultar una luz compila y mostrarla reutiliza la caché, la base se queda con la luz oculta. Si luego compila un material nuevo, se atribuye a "la luz se mostró". *A futuro:* actualizar la base en cada render que no compila (requiere envolver `getProgram`/`compile`).
+- **Cambios de menos de 0.5 s:** si una luz cambia y vuelve a su estado entre dos revisiones, se ve la recompilación pero con causa genérica. *A futuro:* la misma solución que la anterior.
+- **Capas:** no toma en cuenta `light.layers` ni `camera.layers`. *A futuro:* filtrar las luces como three.
+- **Programas efímeros:** un programa que se crea y se libera entre dos revisiones no se ve. *A futuro:* contar en el envoltorio de `linkProgram`, como el medidor.
+- **Coste:** el vigía recorre la escena dos veces por segundo, y otra vez cuando hay programas nuevos. El tope de 8 materiales no corta ese recorrido. No se ha medido el coste en escenas grandes. *A futuro:* medirlo y, si pesa, cortar el recorrido o reusar la lista de luces del renderer.
+- **FPS:** es el promedio de los intervalos de cuadro del último segundo. Incluye completo un cuadro largo que termina dentro de esa ventana, así que no es un conteo estricto de cuadros por segundo.
+- **Pruebas:** `prueba/index.html` usa `listo()` a mano, así que no prueba el arranque automático ni los casos de arriba. *A futuro:* una prueba sin `listo()` y otra con un cambio de luz entre revisiones.
+
 ## Prueba
 
 ```bash
