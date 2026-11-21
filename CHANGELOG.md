@@ -2,6 +2,12 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versiones con [SemVer](https://semver.org/lang/es/).
 
+## [0.2.1] - 2026-11-20
+
+### Corregido
+- `listo()` toma como arranque los programas y la firma de luces que ya existen (antes todos contaban como recompilación).
+- Al volver a la pestaña ya no aparece un "cuadro de X s" falso por el tiempo en segundo plano.
+
 ## [0.2.0] - 2026-11-20
 
 ### Agregado

@@ -1,4 +1,4 @@
-// inspector-3d v0.2.0 — panel de depuración para gemelos three.js r160 (MIT).
+// inspector-3d v0.2.1 — panel de depuración para gemelos three.js r160 (MIT).
 // Se activa con ?debug=1. Sin ese parámetro no hace nada (ni DOM, ni globales, ni parches).
 // Encuentra renderer, escena, cámara y composer solo, por el hook __THREE_DEVTOOLS__ de three; attach() es el respaldo.
 import * as THREE from 'three';
@@ -91,6 +91,8 @@ function iniciar() {
     requestAnimationFrame(cuadro);
   };
   requestAnimationFrame(cuadro);
+  // al volver a la pestaña el primer intervalo incluye el tiempo en segundo plano: no es un cuadro lento
+  document.addEventListener('visibilitychange', () => { vent.length = 0; ult = performance.now(); });
   addEventListener('pointerdown', altClic, true);
 }
 
@@ -103,6 +105,7 @@ function iniciar() {
 const vig = { vistos: new Set(), listo: false, tUlt: 0, tRev: 0, luces: new Map(), tipo: null, alertas: [], escena: null };
 const ocultoPor = (o) => { for (let a = o; a; a = a.parent) if (!a.visible) return a; return null; };   // three no junta una luz si ella o un padre está oculto
 const firmaLuz = (l) => { const h = ocultoPor(l); return { vis: !h, sombra: !!l.castShadow, por: h }; };
+const lucesDe = (sc) => { const m = new Map(); sc.traverse((o) => { if (o.isLight && !esHelper(o)) m.set(o, firmaLuz(o)); }); return m; };
 function vigilar(t) {
   const r = S.renderer; if (!r || !S.scene) return;
   // el arranque cuenta desde el primer render de la escena principal (antes puede haber una pantalla de carga larga sin
@@ -110,7 +113,7 @@ function vigilar(t) {
   if (vig.escena !== S.scene) { vig.escena = S.scene; if (!vig.listoManual) { vig.listo = false; vig.tUlt = t; } }
   const progs = r.info.programs || [], nuevos = progs.filter((p) => !vig.vistos.has(p.id));
   for (const p of nuevos) vig.vistos.add(p.id);
-  const luces = new Map(); S.scene.traverse((o) => { if (o.isLight && !esHelper(o)) luces.set(o, firmaLuz(o)); });
+  const luces = lucesDe(S.scene);
   if (nuevos.length && vig.listo) {
     const causas = [], nom = (o) => o.name || o.type, sitio = (o) => { const x = origen(o); return x.corta || x.texto; };
     for (const [l, f] of luces) {
@@ -420,7 +423,10 @@ function pintarToggles() {
 }
 
 const api = {
-  attach, stats, select, set, listo: () => { vig.listo = vig.listoManual = true; }, get recompilaciones() { return vig.alertas; }, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto, pila: (o) => origen(o).corta,
+  attach, stats, select, set, listo: () => { // los programas que ya existen son el arranque, y su firma de luces es la base
+    vig.listo = vig.listoManual = true; const r = S.renderer;
+    if (r) { for (const p of r.info.programs || []) vig.vistos.add(p.id); vig.tipo = r.shadowMap.type; }
+    if (S.scene) { vig.escena = S.scene; vig.luces = lucesDe(S.scene); } }, get recompilaciones() { return vig.alertas; }, copiarCamara, copiarObjeto, memoria, origen: (o) => origen(o).texto, pila: (o) => origen(o).corta,
   get renderer() { return S.renderer; }, get scene() { return S.scene; }, get camera() { return S.camera; },
   get composer() { return S.composer; }, get controls() { return S.controls; }, get seleccion() { return sel; },
 };
