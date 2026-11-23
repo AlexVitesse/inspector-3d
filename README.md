@@ -7,7 +7,7 @@ Lo que da:
 
 | Sección | Qué hace |
 |---|---|
-| Stats | fps, ms (media y máximo), draw calls, triángulos, líneas y puntos **por cuadro**, geometrías, texturas, programas y heap. Se pinta 4 veces por segundo. |
+| Stats | fps, ms (media y máximo), draw calls, triángulos, líneas y puntos **por cuadro**, geometrías, texturas, programas, heap y versión de three (`three r187`). Se pinta 4 veces por segundo. |
 | Memoria estimada | Al pulsar: MB de atributos (cada geometría una vez) y de texturas (`w*h*4*1.33`, cada `source` una vez). |
 | Escena | Árbol perezoso (los hijos se crean al abrir el nodo) con descendientes y k tris. Clic = seleccionar. |
 | Top coste | Los 20 meshes visibles con más tris × instancias. |
@@ -81,7 +81,7 @@ window.__inspector3d = {
 }
 ```
 
-- `stats`: objeto plano `{fps, ms, msMax, calls, tris, lineas, puntos, geometrias, texturas, programas, heapMB}`. Lo puede leer otra herramienta (por ejemplo `--extra "window.__inspector3d?.stats"`).
+- `stats`: objeto plano `{three, fps, ms, msMax, calls, tris, lineas, puntos, geometrias, texturas, programas, heapMB}` (`three` = `THREE.REVISION`). Lo puede leer otra herramienta (por ejemplo `--extra "window.__inspector3d?.stats"`).
 - `seleccion`: `{ objeto, instanceId } | null`.
 - `recompilaciones` (v0.2): `[{ t, nuevos, total, causas: [texto], materiales: [texto] }]`, una por cada vez que aparecieron programas nuevos después del arranque. `listo()` marca el fin del arranque a mano; si no, el arranque termina tras 3 s sin programas nuevos.
 - `origen(obj)`: `archivo:línea`; `pila(obj)`: la pila corta. `attach({ saltar: [...] })` fija los helpers a saltar.

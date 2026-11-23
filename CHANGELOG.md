@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versiones con [SemVer](https://semver.org/lang/es/).
 
+## [0.2.2] - 2026-11-23
+
+### Agregado
+- Versión de three (`THREE.REVISION`) en la sección Stats y en `stats.three`, para saber qué versión tiene cada gemelo al migrarlo (r160 → r187).
+
 ## [0.2.1] - 2026-11-20
 
 ### Corregido

@@ -1,4 +1,4 @@
-// inspector-3d v0.2.1 — panel de depuración para gemelos three.js r160 (MIT).
+// inspector-3d v0.2.2 — panel de depuración para gemelos three.js r160–r187 (MIT).
 // Se activa con ?debug=1. Sin ese parámetro no hace nada (ni DOM, ni globales, ni parches).
 // Encuentra renderer, escena, cámara y composer solo, por el hook __THREE_DEVTOOLS__ de three; attach() es el respaldo.
 import * as THREE from 'three';
@@ -8,7 +8,7 @@ const MARCA = '__inspector3d';                  // userData del resaltado: fuera
 const origenes = new WeakMap();                  // hijo → Error de la primera vez que se agregó
 const PROF = 24;                                 // frames que guarda ese Error (three + helpers de la app + llamador); no toca el límite global
 const S = { renderer: null, scene: null, camera: null, composer: null, controls: null };
-const stats = { fps: 0, ms: 0, msMax: 0, calls: 0, tris: 0, lineas: 0, puntos: 0, geometrias: 0, texturas: 0, programas: 0, heapMB: null };
+const stats = { three: THREE.REVISION, fps: 0, ms: 0, msMax: 0, calls: 0, tris: 0, lineas: 0, puntos: 0, geometrias: 0, texturas: 0, programas: 0, heapMB: null };
 const acum = { calls: 0, tris: 0, lineas: 0, puntos: 0 };
 const orig = {};                                 // valores originales de los toggles: todo se puede revertir
 const cfg = { saltar: [] };                      // funciones helper que el origen se salta (attach({saltar}) o window.__inspector3dSaltar)
@@ -365,7 +365,7 @@ function pintarStats() {
   const p = ui?.querySelector('.i3-stats'); if (!p) return;
   const s = stats;
   p.textContent = `${s.msMax > 1000 ? `⚠ cuadro de ${(s.msMax / 1000).toFixed(1)} s\n` : ''}${s.fps} fps · ${s.ms} ms (máx ${s.msMax})\n${s.calls} calls · ${(s.tris / 1e3).toFixed(1)} k tris · ${s.lineas} lín · ${s.puntos} pts\n` +
-    `geo ${s.geometrias} · tex ${s.texturas} · prog ${s.programas}${s.heapMB != null ? ` · heap ${s.heapMB} MB` : ''}` +
+    `geo ${s.geometrias} · tex ${s.texturas} · prog ${s.programas}${s.heapMB != null ? ` · heap ${s.heapMB} MB` : ''} · three r${s.three}` +
     (S.scene ? '' : '\n(sin escena: ¿se cargó antes que el renderer? usa attach())');
 }
 function nodo(o) {

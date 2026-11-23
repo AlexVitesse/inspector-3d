@@ -1,6 +1,6 @@
 {
   "name": "inspector-3d",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Panel de depuración para gemelos three.js r160: stats por cuadro, árbol, selección con Alt+clic, origen de cada objeto y toggles.",
   "private": true,
   "type": "module",
